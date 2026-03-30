@@ -291,7 +291,6 @@ export default function Home() {
                       improvements={analysisResult?.improvements || []}
                       loading={showAnalyzer && !analysisResult}
                     />
-                    />
                   )}
 
                   {/* Framework Selector */}
