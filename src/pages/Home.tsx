@@ -3,15 +3,15 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search } from "lucide-react";
+import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import Footer from "@/components/Footer";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import ImproveModal from "@/components/ImproveModal";
 import { detectIntent, type IntentResult } from "@/lib/intentDetector";
-import { analyzePrompt, type AnalysisResult } from "@/lib/promptAnalyzer";
-import { improvePrompt } from "@/lib/promptImprover";
+import type { AnalysisResult } from "@/lib/promptAnalyzer";
+import { supabase } from "@/integrations/supabase/client";
 
 const QUICK_SUGGESTIONS = [
   "Write a thank you email",
@@ -76,16 +76,19 @@ export default function Home() {
     localStorage.setItem("prompt-history", JSON.stringify(history));
   }, [history]);
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     if (!userInput.trim()) {
       toast.error("Please enter a prompt description");
       return;
     }
     setIsGenerating(true);
-
-    // Simulate generation with improvement logic
-    setTimeout(() => {
-      const result = improvePrompt(userInput, framework);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-prompt", {
+        body: { userInput, framework },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      const result = data.generatedPrompt;
       setGeneratedPrompt(result);
       const newItem: HistoryItem = {
         id: Date.now(),
@@ -95,27 +98,49 @@ export default function Home() {
         createdAt: new Date().toISOString(),
       };
       setHistory(prev => [newItem, ...prev]);
-      setIsGenerating(false);
       toast.success("Prompt generated successfully!");
-    }, 800);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to generate prompt");
+    } finally {
+      setIsGenerating(false);
+    }
   }, [userInput, framework]);
 
-  const handleAnalyze = useCallback(() => {
+  const handleAnalyze = useCallback(async () => {
     if (!userInput.trim()) return;
-    const result = analyzePrompt(userInput);
-    setAnalysisResult(result);
     setShowAnalyzer(true);
-    toast.success("Prompt analyzed!");
+    setAnalysisResult(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("analyze-prompt", {
+        body: { prompt: userInput },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setAnalysisResult(data as AnalysisResult);
+      toast.success("Prompt analyzed!");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to analyze prompt");
+      setShowAnalyzer(false);
+    }
   }, [userInput]);
 
-  const handleImprove = useCallback(() => {
+  const handleImprove = useCallback(async () => {
     setIsImproving(true);
     setShowImproveModal(true);
-    setTimeout(() => {
-      const result = improvePrompt(userInput, framework);
-      setImprovedPromptText(result);
+    setImprovedPromptText("");
+    try {
+      const { data, error } = await supabase.functions.invoke("improve-prompt", {
+        body: { prompt: userInput, framework },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setImprovedPromptText(data.improvedPrompt);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to improve prompt");
+      setShowImproveModal(false);
+    } finally {
       setIsImproving(false);
-    }, 600);
+    }
   }, [userInput, framework]);
 
   const handleAcceptImproved = useCallback((text: string) => {
@@ -125,13 +150,20 @@ export default function Home() {
     setAnalysisResult(null);
   }, []);
 
-  const handleRegenerate = useCallback(() => {
+  const handleRegenerate = useCallback(async () => {
     setIsImproving(true);
-    setTimeout(() => {
-      const result = improvePrompt(userInput + " " + Math.random().toString(36).slice(2, 5), framework);
-      setImprovedPromptText(result);
+    try {
+      const { data, error } = await supabase.functions.invoke("improve-prompt", {
+        body: { prompt: userInput, framework },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setImprovedPromptText(data.improvedPrompt);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to regenerate");
+    } finally {
       setIsImproving(false);
-    }, 600);
+    }
   }, [userInput, framework]);
 
   const handleCopy = useCallback((text: string) => {
@@ -257,6 +289,7 @@ export default function Home() {
                     <AnalysisPanel
                       scores={analysisResult?.scores || null}
                       improvements={analysisResult?.improvements || []}
+                      loading={showAnalyzer && !analysisResult}
                     />
                   )}
 
