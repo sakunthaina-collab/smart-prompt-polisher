@@ -289,6 +289,8 @@ export default function Home() {
                     <AnalysisPanel
                       scores={analysisResult?.scores || null}
                       improvements={analysisResult?.improvements || []}
+                      loading={showAnalyzer && !analysisResult}
+                    />
                     />
                   )}
 
