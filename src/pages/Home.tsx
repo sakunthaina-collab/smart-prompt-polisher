@@ -3,15 +3,15 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search } from "lucide-react";
+import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import Footer from "@/components/Footer";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import ImproveModal from "@/components/ImproveModal";
 import { detectIntent, type IntentResult } from "@/lib/intentDetector";
-import { analyzePrompt, type AnalysisResult } from "@/lib/promptAnalyzer";
-import { improvePrompt } from "@/lib/promptImprover";
+import type { AnalysisResult } from "@/lib/promptAnalyzer";
+import { supabase } from "@/integrations/supabase/client";
 
 const QUICK_SUGGESTIONS = [
   "Write a thank you email",
