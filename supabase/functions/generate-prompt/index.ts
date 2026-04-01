@@ -50,6 +50,7 @@ Generate ONLY the prompt text. No explanations, no markdown formatting, no code 
           },
           { role: "user", content: userInput },
         ],
+        stream: true,
       }),
     });
 
@@ -69,13 +70,8 @@ Generate ONLY the prompt text. No explanations, no markdown formatting, no code 
       throw new Error("AI gateway error");
     }
 
-    const data = await response.json();
-    const generatedPrompt = data.choices?.[0]?.message?.content?.trim() || "";
-
-    if (!generatedPrompt) throw new Error("Empty response from AI");
-
-    return new Response(JSON.stringify({ generatedPrompt }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(response.body, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (e) {
     console.error("generate-prompt error:", e);
