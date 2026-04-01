@@ -367,7 +367,9 @@ export default function Home() {
                     disabled={isGenerating || !userInput.trim()}
                     className="w-full py-6 text-lg font-semibold transition-all hover:shadow-lg active:scale-[0.98]"
                   >
-                    {isGenerating ? "Generating..." : (
+                    {isGenerating ? (
+                      <><Loader2 className="w-5 h-5 mr-2 animate-spin" />Generating...</>
+                    ) : (
                       <><Sparkles className="w-5 h-5 mr-2" />Generate Prompt</>
                     )}
                   </Button>
