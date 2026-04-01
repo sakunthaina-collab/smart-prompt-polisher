@@ -82,23 +82,74 @@ export default function Home() {
       return;
     }
     setIsGenerating(true);
+    setGeneratedPrompt("");
+
     try {
-      const { data, error } = await supabase.functions.invoke("generate-prompt", {
-        body: { userInput, framework },
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-prompt`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify({ userInput, framework }),
       });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-      const result = data.generatedPrompt;
-      setGeneratedPrompt(result);
-      const newItem: HistoryItem = {
-        id: Date.now(),
-        userInput,
-        generatedPrompt: result,
-        framework,
-        createdAt: new Date().toISOString(),
-      };
-      setHistory(prev => [newItem, ...prev]);
-      toast.success("Prompt generated successfully!");
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.error || `Error ${resp.status}`);
+      }
+
+      if (!resp.body) throw new Error("No response body");
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let textBuffer = "";
+      let fullText = "";
+      let streamDone = false;
+
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        textBuffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+          let line = textBuffer.slice(0, newlineIndex);
+          textBuffer = textBuffer.slice(newlineIndex + 1);
+
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          if (line.startsWith(":") || line.trim() === "") continue;
+          if (!line.startsWith("data: ")) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") { streamDone = true; break; }
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+            if (content) {
+              fullText += content;
+              setGeneratedPrompt(fullText);
+            }
+          } catch {
+            textBuffer = line + "\n" + textBuffer;
+            break;
+          }
+        }
+      }
+
+      if (fullText) {
+        const newItem: HistoryItem = {
+          id: Date.now(),
+          userInput,
+          generatedPrompt: fullText,
+          framework,
+          createdAt: new Date().toISOString(),
+        };
+        setHistory(prev => [newItem, ...prev]);
+        toast.success("Prompt generated!");
+      }
     } catch (error: any) {
       toast.error(error?.message || "Failed to generate prompt");
     } finally {
@@ -316,7 +367,9 @@ export default function Home() {
                     disabled={isGenerating || !userInput.trim()}
                     className="w-full py-6 text-lg font-semibold transition-all hover:shadow-lg active:scale-[0.98]"
                   >
-                    {isGenerating ? "Generating..." : (
+                    {isGenerating ? (
+                      <><Loader2 className="w-5 h-5 mr-2 animate-spin" />Generating...</>
+                    ) : (
                       <><Sparkles className="w-5 h-5 mr-2" />Generate Prompt</>
                     )}
                   </Button>
