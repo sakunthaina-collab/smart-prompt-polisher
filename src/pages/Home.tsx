@@ -3,14 +3,16 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search, Loader2 } from "lucide-react";
+import { Copy, Trash2, Download, Sparkles, ArrowRight, Zap, Search, Loader2, RotateCcw, Minimize2, MessageSquare } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import Footer from "@/components/Footer";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import ImproveModal from "@/components/ImproveModal";
+import ComparePanel from "@/components/ComparePanel";
 import { detectIntent, type IntentResult } from "@/lib/intentDetector";
 import type { AnalysisResult } from "@/lib/promptAnalyzer";
+import { scorePrompt, type PromptScore } from "@/lib/promptScorer";
 import { supabase } from "@/integrations/supabase/client";
 
 const QUICK_SUGGESTIONS = [
@@ -36,6 +38,7 @@ interface HistoryItem {
   id: number;
   userInput: string;
   generatedPrompt: string;
+  improvedPrompt?: string;
   framework: string;
   createdAt: string;
 }
@@ -46,6 +49,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"generate" | "history">("generate");
   const [generatedPrompt, setGeneratedPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [inputError, setInputError] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("prompt-history") || "[]");
@@ -59,6 +63,11 @@ export default function Home() {
   const [showImproveModal, setShowImproveModal] = useState(false);
   const [improvedPromptText, setImprovedPromptText] = useState("");
   const [isImproving, setIsImproving] = useState(false);
+
+  // Compare mode state
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareOriginal, setCompareOriginal] = useState("");
+  const [compareImproved, setCompareImproved] = useState("");
 
   // Auto-detect intent when input changes
   useEffect(() => {
@@ -76,13 +85,21 @@ export default function Home() {
     localStorage.setItem("prompt-history", JSON.stringify(history));
   }, [history]);
 
+  // Clear input error when user types
+  useEffect(() => {
+    if (userInput.trim()) setInputError("");
+  }, [userInput]);
+
   const handleGenerate = useCallback(async () => {
     if (!userInput.trim()) {
-      toast.error("Please enter a prompt description");
+      setInputError("Please enter a prompt");
+      toast.error("Please enter a prompt");
       return;
     }
+    setInputError("");
     setIsGenerating(true);
     setGeneratedPrompt("");
+    setShowCompare(false);
 
     try {
       const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-prompt`;
@@ -158,7 +175,10 @@ export default function Home() {
   }, [userInput, framework]);
 
   const handleAnalyze = useCallback(async () => {
-    if (!userInput.trim()) return;
+    if (!userInput.trim()) {
+      setInputError("Please enter a prompt");
+      return;
+    }
     setShowAnalyzer(true);
     setAnalysisResult(null);
     try {
@@ -176,6 +196,10 @@ export default function Home() {
   }, [userInput]);
 
   const handleImprove = useCallback(async () => {
+    if (!userInput.trim()) {
+      setInputError("Please enter a prompt");
+      return;
+    }
     setIsImproving(true);
     setShowImproveModal(true);
     setImprovedPromptText("");
@@ -195,11 +219,26 @@ export default function Home() {
   }, [userInput, framework]);
 
   const handleAcceptImproved = useCallback((text: string) => {
+    // Show compare mode
+    setCompareOriginal(userInput);
+    setCompareImproved(text);
+    setShowCompare(true);
+
+    // Update history: add improved prompt to latest matching item
+    setHistory(prev => {
+      const updated = [...prev];
+      const idx = updated.findIndex(h => h.userInput === userInput);
+      if (idx !== -1) {
+        updated[idx] = { ...updated[idx], improvedPrompt: text };
+      }
+      return updated;
+    });
+
     setUserInput(text);
     setShowImproveModal(false);
     setShowAnalyzer(false);
     setAnalysisResult(null);
-  }, []);
+  }, [userInput]);
 
   const handleRegenerate = useCallback(async () => {
     setIsImproving(true);
@@ -217,6 +256,43 @@ export default function Home() {
     }
   }, [userInput, framework]);
 
+  // Quick Actions
+  const handleQuickAction = useCallback(async (action: "improve" | "shorten" | "persuasive") => {
+    const targetText = generatedPrompt || userInput;
+    if (!targetText.trim()) {
+      setInputError("Please enter a prompt");
+      toast.error("Please enter a prompt");
+      return;
+    }
+
+    setIsImproving(true);
+    setShowImproveModal(true);
+    setImprovedPromptText("");
+
+    const instructions: Record<string, string> = {
+      improve: "Improve this prompt to be clearer, more specific, and more effective.",
+      shorten: "Make this prompt shorter and more concise while keeping the core intent. Remove unnecessary words.",
+      persuasive: "Rewrite this prompt to be more persuasive, compelling, and action-oriented. Use stronger language.",
+    };
+
+    try {
+      const { data, error } = await supabase.functions.invoke("improve-prompt", {
+        body: {
+          prompt: `${instructions[action]}\n\nOriginal prompt:\n"${targetText}"`,
+          framework,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setImprovedPromptText(data.improvedPrompt);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to process");
+      setShowImproveModal(false);
+    } finally {
+      setIsImproving(false);
+    }
+  }, [generatedPrompt, userInput, framework]);
+
   const handleCopy = useCallback((text: string) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard!");
@@ -227,17 +303,33 @@ export default function Home() {
     toast.success("Prompt deleted");
   }, []);
 
+  const handleLoadFromHistory = useCallback((item: HistoryItem) => {
+    setUserInput(item.userInput);
+    setGeneratedPrompt(item.generatedPrompt);
+    if (item.improvedPrompt) {
+      setCompareOriginal(item.userInput);
+      setCompareImproved(item.improvedPrompt);
+      setShowCompare(true);
+    } else {
+      setShowCompare(false);
+    }
+    setActiveTab("generate");
+    toast.success("Prompt loaded from history");
+  }, []);
+
   const handleExport = useCallback((format: "txt" | "csv") => {
     if (history.length === 0) { toast.error("No prompts to export"); return; }
     let content: string;
     let filename: string;
     if (format === "csv") {
-      content = "Framework,Input,Generated\n" + history.map(h =>
-        `"${h.framework}","${h.userInput.replace(/"/g, '""')}","${h.generatedPrompt.replace(/"/g, '""')}"`
+      content = "Framework,Input,Generated,Improved\n" + history.map(h =>
+        `"${h.framework}","${h.userInput.replace(/"/g, '""')}","${h.generatedPrompt.replace(/"/g, '""')}","${(h.improvedPrompt || "").replace(/"/g, '""')}"`
       ).join("\n");
       filename = "prompts.csv";
     } else {
-      content = history.map(h => `[${h.framework}]\nInput: ${h.userInput}\nGenerated: ${h.generatedPrompt}\n`).join("\n---\n\n");
+      content = history.map(h =>
+        `[${h.framework}]\nInput: ${h.userInput}\nGenerated: ${h.generatedPrompt}${h.improvedPrompt ? `\nImproved: ${h.improvedPrompt}` : ""}\n`
+      ).join("\n---\n\n");
       filename = "prompts.txt";
     }
     const blob = new Blob([content], { type: "text/plain" });
@@ -247,6 +339,10 @@ export default function Home() {
     URL.revokeObjectURL(url);
     toast.success(`Exported as ${format.toUpperCase()}`);
   }, [history]);
+
+  // Compute scores for compare mode
+  const originalScore = showCompare ? scorePrompt(compareOriginal) : null;
+  const improvedScore = showCompare ? scorePrompt(compareImproved) : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-accent/5">
@@ -301,9 +397,16 @@ export default function Home() {
                       placeholder="I want a prompt that will..."
                       value={userInput}
                       onChange={(e) => setUserInput(e.target.value)}
-                      className="min-h-32 resize-none transition-all focus:ring-2 focus:ring-primary"
+                      className={`min-h-32 resize-none transition-all focus:ring-2 focus:ring-primary ${
+                        inputError ? "border-destructive ring-destructive" : ""
+                      }`}
                     />
-                    <p className="text-xs text-muted-foreground mt-2">{userInput.length}/500 characters</p>
+                    <div className="flex justify-between items-center mt-2">
+                      <p className="text-xs text-muted-foreground">{userInput.length}/500 characters</p>
+                      {inputError && (
+                        <p className="text-xs text-destructive font-medium">{inputError}</p>
+                      )}
+                    </div>
                   </div>
 
                   {/* Intent Display + Smart Buttons */}
@@ -389,7 +492,51 @@ export default function Home() {
                           <Download className="w-4 h-4 mr-2" />Export TXT
                         </Button>
                       </div>
+
+                      {/* Quick Actions */}
+                      <div className="mt-4 pt-3 border-t border-success/20">
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Quick Actions</p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleQuickAction("improve")}
+                            className="gap-1"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            Improve Again
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleQuickAction("shorten")}
+                            className="gap-1"
+                          >
+                            <Minimize2 className="w-3 h-3" />
+                            Make Shorter
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleQuickAction("persuasive")}
+                            className="gap-1"
+                          >
+                            <MessageSquare className="w-3 h-3" />
+                            Make More Persuasive
+                          </Button>
+                        </div>
+                      </div>
                     </div>
+                  )}
+
+                  {/* Compare Mode */}
+                  {showCompare && originalScore && improvedScore && (
+                    <ComparePanel
+                      original={compareOriginal}
+                      improved={compareImproved}
+                      originalScore={originalScore}
+                      improvedScore={improvedScore}
+                    />
                   )}
 
                   {/* Quick Suggestions */}
@@ -418,18 +565,45 @@ export default function Home() {
                         <Button size="sm" variant="outline" onClick={() => handleExport("csv")}>Export CSV</Button>
                       </div>
                       {history.map((item) => (
-                        <div key={item.id} className="p-4 bg-muted rounded-lg border hover:shadow-md transition-all">
+                        <div
+                          key={item.id}
+                          className="p-4 bg-muted rounded-lg border hover:shadow-md transition-all cursor-pointer"
+                          onClick={() => handleLoadFromHistory(item)}
+                        >
                           <div className="flex justify-between items-start mb-2">
                             <Badge variant="outline">{item.framework}</Badge>
-                            <button onClick={() => handleDelete(item.id)} className="text-muted-foreground hover:text-destructive transition-colors">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(item.createdAt).toLocaleDateString()}
+                              </span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                                className="text-muted-foreground hover:text-destructive transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                          <p className="text-sm text-muted-foreground mb-2 font-medium">{item.userInput}</p>
-                          <p className="text-sm text-foreground mb-3 line-clamp-3">{item.generatedPrompt}</p>
-                          <Button size="sm" variant="outline" onClick={() => handleCopy(item.generatedPrompt)}>
-                            <Copy className="w-4 h-4 mr-2" />Copy
-                          </Button>
+                          <p className="text-sm text-muted-foreground mb-1 font-medium">
+                            Original: {item.userInput}
+                          </p>
+                          <p className="text-sm text-foreground mb-1 line-clamp-2">
+                            Generated: {item.generatedPrompt}
+                          </p>
+                          {item.improvedPrompt && (
+                            <p className="text-sm text-primary line-clamp-2">
+                              Improved: {item.improvedPrompt}
+                            </p>
+                          )}
+                          <div className="flex gap-2 mt-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => { e.stopPropagation(); handleCopy(item.generatedPrompt); }}
+                            >
+                              <Copy className="w-4 h-4 mr-1" />Copy
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </>
